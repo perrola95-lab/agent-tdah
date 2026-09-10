@@ -11,13 +11,14 @@ def render_admin_panel():
     badge_count = f"({len(pending_users)} en attente)" if pending_users else ""
 
     db_badge = "☁️ Google Cloud Firestore (Persistant)" if auth_service.use_firestore else "💾 SQLite Local (Développement)"
-    with st.expander(f"🛡️ **Espace Administrateur • Gestion des Comptes {badge_count}**", expanded=bool(pending_users)):
-        col_caption, col_refresh = st.columns([3.6, 1.4], vertical_alignment="center")
+    with st.expander(f"🛡️ **Espace Administrateur • Gestion des Comptes {badge_count}**", expanded=True):
+        col_caption, col_refresh = st.columns([3.2, 1.8], vertical_alignment="center")
         with col_caption:
-            st.caption(f"Validez ou gérez les accès des utilisateurs. • **Base active :** `{db_badge}`")
+            st.markdown(f"**Base active :** `{db_badge}`")
+            st.caption("Modérez les inscriptions et gérez les formules d'abonnements des élèves.")
         with col_refresh:
-            if st.button("🔄 Actualiser", key="btn_refresh_admin_users", help="Rafraîchir la liste des demandes et des comptes enregistrés", use_container_width=True):
-                st.toast("Liste actualisée !", icon="🔄")
+            if st.button("🔄 Actualiser les comptes", key="btn_refresh_admin_users", type="primary", use_container_width=True):
+                st.toast("Liste des comptes actualisée !", icon="🔄")
                 st.rerun()
 
         # --- ONGLET 1 : DEMANDES EN ATTENTE ---
