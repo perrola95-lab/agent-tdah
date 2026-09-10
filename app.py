@@ -9,6 +9,15 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Prise en charge des Secrets Streamlit Community Cloud
+try:
+    if hasattr(st, "secrets"):
+        for _k, _v in st.secrets.items():
+            if isinstance(_v, str) and _k not in os.environ:
+                os.environ[_k] = _v
+except Exception:
+    pass
+
 from agents.curator import CuratorAgent
 from agents.visualizer import VisualizerAgent
 from agents.quiz_agent import QuizAgent

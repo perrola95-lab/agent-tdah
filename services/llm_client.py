@@ -11,7 +11,14 @@ def get_client() -> genai.Client:
     if _client is None:
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
-            raise ValueError("GEMINI_API_KEY introuvable.")
+            try:
+                import streamlit as st
+                if hasattr(st, "secrets") and "GEMINI_API_KEY" in st.secrets:
+                    api_key = st.secrets["GEMINI_API_KEY"]
+            except Exception:
+                pass
+        if not api_key:
+            raise ValueError("GEMINI_API_KEY introuvable. Configurez la clé dans .env ou dans les Secrets Streamlit.")
         _client = genai.Client(api_key=api_key)
     return _client
 
