@@ -6,10 +6,9 @@ import secrets
 import re
 from datetime import datetime
 from dotenv import load_dotenv
+from contextlib import contextmanager
 
 load_dotenv()
-
-from contextlib import contextmanager
 
 DB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
 DB_PATH = os.path.join(DB_DIR, "users.db")
@@ -18,8 +17,28 @@ DB_PATH = os.path.join(DB_DIR, "users.db")
 class AuthService:
     def __init__(self, db_path: str = DB_PATH):
         self.db_path = db_path
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
-        self._init_db()
+        self.use_firestore = False
+        self.firestore_db = None
+
+        # Détection automatique de l'environnement Cloud Run ou activation explicite
+        force_firestore = os.getenv("USE_FIRESTORE", "").lower() in ("true", "1", "yes")
+        is_cloud = bool(os.getenv("K_SERVICE") or os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("GCP_PROJECT"))
+
+        if force_firestore or is_cloud:
+            try:
+                from google.cloud import firestore
+                project_id = os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("GCP_PROJECT") or None
+                self.firestore_db = firestore.Client(project=project_id)
+                self.use_firestore = True
+                print("[AuthService] Mode persistant activé : Google Cloud Firestore")
+            except Exception as e:
+                print(f"[AuthService] Firestore non disponible ({e}), bascule automatique sur SQLite.")
+                self.use_firestore = False
+                self.firestore_db = None
+
+        if not self.use_firestore:
+            os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+            self._init_sqlite()
 
     @contextmanager
     def _get_connection(self):
@@ -31,8 +50,8 @@ class AuthService:
         finally:
             conn.close()
 
-    def _init_db(self):
-        """Initialise la table des utilisateurs avec support des abonnements futurs."""
+    def _init_sqlite(self):
+        """Initialise la table SQLite des utilisateurs pour le développement local."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -75,6 +94,15 @@ class AuthService:
 
     def get_user_count(self) -> int:
         """Retourne le nombre total d'utilisateurs inscrits."""
+        if self.use_firestore:
+            try:
+                count_query = self.firestore_db.collection("users").count()
+                results = count_query.get()
+                return results[0][0].value
+            except Exception:
+                docs = list(self.firestore_db.collection("users").select([]).stream())
+                return len(docs)
+
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT COUNT(*) FROM users")
@@ -94,7 +122,7 @@ class AuthService:
         salt = secrets.token_hex(32)
         pwd_hash = self._hash_password(password, salt)
 
-        # Si c'est le tout premier compte créé sur l'application, ou si l'email correspond à ADMIN_EMAIL
+        # Premier utilisateur inscrit devient Admin
         admin_env_email = os.getenv("ADMIN_EMAIL", "").strip().lower()
         is_first_user = (self.get_user_count() == 0)
         is_admin_candidate = is_first_user or (admin_env_email and clean_email == admin_env_email)
@@ -103,7 +131,35 @@ class AuthService:
         is_admin = 1 if is_admin_candidate else 0
         sub_plan = "fondateur_admin" if is_admin_candidate else "decouverte"
         sub_status = "active" if is_admin_candidate else "pending"
+        now_iso = datetime.now().isoformat()
 
+        if self.use_firestore:
+            try:
+                doc_ref = self.firestore_db.collection("users").document(clean_email)
+                if doc_ref.get().exists:
+                    return {"success": False, "error": "Un compte existe déjà avec cette adresse email."}
+
+                user_data = {
+                    "id": clean_email,
+                    "email": clean_email,
+                    "name": clean_name,
+                    "password_hash": pwd_hash,
+                    "salt": salt,
+                    "is_approved": bool(is_approved),
+                    "is_admin": bool(is_admin),
+                    "subscription_plan": sub_plan,
+                    "subscription_status": sub_status,
+                    "subscription_expires_at": None,
+                    "stripe_customer_id": None,
+                    "created_at": now_iso,
+                    "last_login": None
+                }
+                doc_ref.set(user_data)
+                return {"success": True, "user": user_data}
+            except Exception as e:
+                return {"success": False, "error": f"Erreur Firestore : {str(e)}"}
+
+        # Branche SQLite locale
         try:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
@@ -114,7 +170,7 @@ class AuthService:
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     clean_email, clean_name, pwd_hash, salt, 
-                    is_approved, is_admin, sub_plan, sub_status, datetime.now().isoformat()
+                    is_approved, is_admin, sub_plan, sub_status, now_iso
                 ))
                 conn.commit()
                 user_id = cursor.lastrowid
@@ -140,6 +196,28 @@ class AuthService:
         """Vérifie les identifiants d'un utilisateur et retourne son statut complet."""
         clean_email = email.strip().lower()
 
+        if self.use_firestore:
+            try:
+                doc_ref = self.firestore_db.collection("users").document(clean_email)
+                doc = doc_ref.get()
+                if not doc.exists:
+                    return {"success": False, "error": "Adresse email ou mot de passe incorrect."}
+
+                data = doc.to_dict()
+                if not self._verify_password(password, data["salt"], data["password_hash"]):
+                    return {"success": False, "error": "Adresse email ou mot de passe incorrect."}
+
+                now_iso = datetime.now().isoformat()
+                doc_ref.update({"last_login": now_iso})
+                data["last_login"] = now_iso
+                data["id"] = data.get("id") or clean_email
+                data["is_approved"] = bool(data.get("is_approved", False))
+                data["is_admin"] = bool(data.get("is_admin", False))
+                return {"success": True, "user": data}
+            except Exception as e:
+                return {"success": False, "error": f"Erreur d'authentification : {str(e)}"}
+
+        # Branche SQLite locale
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -155,7 +233,6 @@ class AuthService:
         if not self._verify_password(password, row["salt"], row["password_hash"]):
             return {"success": False, "error": "Adresse email ou mot de passe incorrect."}
 
-        # Mise à jour de la dernière connexion
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("UPDATE users SET last_login = ? WHERE id = ?", (datetime.now().isoformat(), row["id"]))
@@ -178,6 +255,16 @@ class AuthService:
 
     def get_pending_users(self) -> list[dict]:
         """Récupère tous les utilisateurs en attente d'approbation."""
+        if self.use_firestore:
+            docs = self.firestore_db.collection("users").where("is_approved", "==", False).stream()
+            pending = []
+            for d in docs:
+                data = d.to_dict()
+                data["id"] = data.get("id") or d.id
+                pending.append(data)
+            pending.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+            return pending
+
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -190,6 +277,18 @@ class AuthService:
 
     def get_all_users(self) -> list[dict]:
         """Récupère l'ensemble des utilisateurs enregistrés."""
+        if self.use_firestore:
+            docs = self.firestore_db.collection("users").stream()
+            users = []
+            for d in docs:
+                data = d.to_dict()
+                data["id"] = data.get("id") or d.id
+                data["is_approved"] = bool(data.get("is_approved", False))
+                data["is_admin"] = bool(data.get("is_admin", False))
+                users.append(data)
+            users.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+            return users
+
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -200,8 +299,17 @@ class AuthService:
             """)
             return [dict(r) for r in cursor.fetchall()]
 
-    def approve_user(self, user_id: int, plan: str = "gratuit") -> bool:
+    def approve_user(self, user_id, plan: str = "gratuit") -> bool:
         """Approuve un utilisateur en attente et active son accès."""
+        if self.use_firestore:
+            doc_ref = self.firestore_db.collection("users").document(str(user_id))
+            doc_ref.update({
+                "is_approved": True,
+                "subscription_status": "active",
+                "subscription_plan": plan
+            })
+            return True
+
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -212,17 +320,28 @@ class AuthService:
             conn.commit()
             return cursor.rowcount > 0
 
-    def reject_or_delete_user(self, user_id: int) -> bool:
+    def reject_or_delete_user(self, user_id) -> bool:
         """Supprime une demande d'inscription ou un compte utilisateur."""
+        if self.use_firestore:
+            self.firestore_db.collection("users").document(str(user_id)).delete()
+            return True
+
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
             conn.commit()
             return cursor.rowcount > 0
 
-    def toggle_user_access(self, user_id: int, new_status: int) -> bool:
+    def toggle_user_access(self, user_id, new_status: int) -> bool:
         """Active ou suspend l'accès d'un compte utilisateur."""
         sub_status = "active" if new_status == 1 else "suspended"
+        if self.use_firestore:
+            self.firestore_db.collection("users").document(str(user_id)).update({
+                "is_approved": bool(new_status),
+                "subscription_status": sub_status
+            })
+            return True
+
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -233,8 +352,14 @@ class AuthService:
             conn.commit()
             return cursor.rowcount > 0
 
-    def update_user_plan(self, user_id: int, new_plan: str) -> bool:
+    def update_user_plan(self, user_id, new_plan: str) -> bool:
         """Met à jour la formule d'abonnement d'un utilisateur."""
+        if self.use_firestore:
+            self.firestore_db.collection("users").document(str(user_id)).update({
+                "subscription_plan": new_plan
+            })
+            return True
+
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("UPDATE users SET subscription_plan = ? WHERE id = ?", (new_plan, user_id))
