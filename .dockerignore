@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+token.json
+credentials.json
+outputs/
+.git/
+data/*.db
+*.db
+scratch/

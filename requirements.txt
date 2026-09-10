@@ -1,0 +1,13 @@
+google-genai
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib
+streamlit
+requests
+python-dotenv
+markdown
+svglib
+reportlab
+pillow
+resvg-py
+pydantic>=2.0.0
