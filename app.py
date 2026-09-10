@@ -29,7 +29,6 @@ from services.llm_client import create_course_cache
 from services.llm_client import delete_course_cache
 from utils.theme import apply_theme, render_hero_banner
 from utils.focus_timer import render_focus_timer
-from utils.audio_player import render_audio_player
 from utils.reading_tools import render_accessibility_toolbar, get_reading_styles, apply_bionic_reading_to_html
 from utils.progress_tracker import render_progress_banner, render_learning_missions, render_badges_shelf
 from utils.auth_ui import render_auth_page
@@ -307,11 +306,7 @@ with tabs[0]:
         render_accessibility_toolbar()
         st.write("")
 
-        # 2. Lecteur vocal audio Web Speech API
-        render_audio_player(st.session_state['course_markdown'])
-        st.write("")
-
-        # 3. Missions du jour interactives
+        # 2. Missions du jour interactives
         render_learning_missions()
         st.write("")
         

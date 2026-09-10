@@ -1,25 +1,96 @@
 # utils/audio_player.py
 import re
 import json
+import unicodedata
 import streamlit.components.v1 as components
 
 def clean_text_for_speech(text: str) -> str:
-    """Nettoie le markdown pour une lecture vocale naturelle et agréable."""
+    """Nettoie le markdown pour une lecture vocale naturelle et agréable.
+    Supprime tous les emojis, icônes et artefacts visuels pour se concentrer uniquement sur le texte."""
     if not text:
         return ""
-    # Retirer les blocs de code, SVG, et diagrammes Mermaid
-    t = re.sub(r'```[\s\S]*?```', '', text)
-    t = re.sub(r'<svg[\s\S]*?</svg>', '', t)
+
+    t = text
+
+    # 1. Retirer les blocs de code, SVG, diagrammes Mermaid et balises HTML
+    t = re.sub(r'```[\s\S]*?```', '', t)
+    t = re.sub(r'<svg[\s\S]*?</svg>', '', t, flags=re.IGNORECASE)
+    t = re.sub(r'<style[\s\S]*?</style>', '', t, flags=re.IGNORECASE)
+    t = re.sub(r'<script[\s\S]*?</script>', '', t, flags=re.IGNORECASE)
     t = re.sub(r'<[^>]+>', '', t)
-    # Retirer les marqueurs spéciaux
-    t = re.sub(r':red\[(.*?)\]', r'\1', t)
-    t = re.sub(r':green\[(.*?)\]', r'\1', t)
-    # Retirer les liens et symboles markdown
+
+    # 2. Retirer les images markdown ![alt](url)
+    t = re.sub(r'!\[.*?\]\(.*?\)', '', t)
+
+    # 3. Retirer les liens markdown [texte](url) en conservant uniquement le texte
     t = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', t)
-    t = re.sub(r'[#*_`~>|]', '', t)
-    # Remplacer les tirets et émojis excessifs
-    t = re.sub(r'\s+', ' ', t).strip()
-    return t[:6000] # Limiter à environ 5 à 7 min de lecture
+
+    # 4. Retirer les marqueurs spécifiques Streamlit (:red[texte], :green[texte], etc.)
+    t = re.sub(r':[a-z]+\[([\s\S]*?)\]', r'\1', t)
+
+    # 5. Remplacer les flèches visuelles (➔, ➜, →, ->, =>) par une virgule pour une pause vocale naturelle
+    t = re.sub(r'\s*(?:[➔➜➡➤►→⇒]|->|-->|=>|==>)\s*', ', ', t)
+
+    # 6. Remplacer '&' isolé par 'et' (évite la vocalisation "esperluette" ou "et commercial")
+    t = re.sub(r'\s+&\s+', ' et ', t)
+
+    # 7. Éliminer tous les emojis et icônes (caractères pictographiques, symboles décoratifs)
+    # Les moteurs TTS vocalisent les noms des icônes ("ampoule électrique", "cible", "punaise", etc.)
+    emoji_pattern = re.compile(
+        "["
+        "\U0001F000-\U0001FAFF"  # Emojis & Pictographes supplémentaires (💡, 📌, 🎯, 🚀, 🧠, 🏛, etc.)
+        "\U00002600-\U000026FF"  # Symboles divers (⚠️, ⚡, ☕, ⚽, ⚙, etc.)
+        "\U00002700-\U000027BF"  # Dingbats (✅, ❌, ❓, ✍, etc.)
+        "\U00002300-\U000023FF"  # Technique (⏰, ⏱, ⏳, etc.)
+        "\U00002B00-\U00002BFF"  # Symboles et flèches (⭐, ⬅, ⬆, etc.)
+        "\U000025A0-\U000025FF"  # Formes géométriques (■, ▲, ●, 🟢, 🟡, 🔴, etc.)
+        "\U00002190-\U000021FF"  # Flèches simples (←, →, ↑, ↓)
+        "\u200D"                 # Zero-Width Joiner (combinaisons émojis comme 🚶‍♂️)
+        "\uFE0E-\uFE0F"          # Variation Selectors
+        "\u203C\u2049"           # ‼️, ⁉️
+        "\u00A9\u00AE"           # ©, ®
+        "]+",
+        flags=re.UNICODE
+    )
+    t = emoji_pattern.sub(' ', t)
+
+    # Filtrage approfondi Unicode : retire toute catégorie 'So' (Symbol, other) et 'Sk' (Symbol, modifier)
+    t = "".join(c if unicodedata.category(c) not in ('So', 'Sk') else " " for c in t)
+
+    # 8. Nettoyage de la structure Markdown
+    # En-têtes Markdown (# Titre, ## Sous-titre) -> ponctuation propre pour marquer la pause
+    def clean_heading(match):
+        h_text = match.group(1).strip()
+        if not h_text:
+            return ""
+        if not h_text[-1] in ".?!:":
+            return f"\n\n{h_text}.\n"
+        return f"\n\n{h_text}\n"
+
+    t = re.sub(r'(?m)^\s*#{1,6}\s*(.*?)$', clean_heading, t)
+
+    # Puces de liste (- item, * item, • item)
+    t = re.sub(r'(?m)^\s*[-*•]\s+', '\n', t)
+
+    # Citations (> texte)
+    t = re.sub(r'(?m)^\s*>\s*', '', t)
+
+    # Symboles de formatage markdown restants (gras, italique, code, tilde, barres)
+    t = re.sub(r'[*_`~|]', '', t)
+
+    # 9. Harmonisation de la ponctuation et des espaces
+    t = re.sub(r'\s*,\s*,\s*', ', ', t)
+    t = re.sub(r'\s*,\s*\.', '.', t)
+    t = re.sub(r'\s+([.,])', r'\1', t)
+    t = re.sub(r'([.,;?!:])(?=[^\s\d])', r'\1 ', t)
+    t = re.sub(r'\n{3,}', '\n\n', t)
+    t = re.sub(r'[ \t]+', ' ', t)
+
+    lines = [line.strip() for line in t.split('\n') if line.strip()]
+    result = " ".join(lines)
+    result = re.sub(r'\s+', ' ', result).strip()
+
+    return result[:6000] # Limiter à environ 5 à 7 min de lecture
 
 def render_audio_player(course_text: str):
     """Rendu d'un lecteur vocal Web Speech API fluide, sans latence ni coût serveur."""
