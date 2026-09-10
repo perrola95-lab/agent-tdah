@@ -14,5 +14,5 @@ COPY . .
 
 EXPOSE 8080
 
-# Démarrage de Streamlit adapté à Cloud Run
-CMD ["streamlit", "run", "app.py", "--server.port=8080", "--server.address=0.0.0.0", "--server.enableCORS=false", "--server.enableXsrfProtection=false"]
+# Démarrage de Streamlit adapté à Cloud Run ($PORT dynamique)
+CMD ["sh", "-c", "streamlit run app.py --server.port=${PORT:-8080} --server.address=0.0.0.0 --server.enableCORS=false --server.enableXsrfProtection=false"]
