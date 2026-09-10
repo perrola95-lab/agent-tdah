@@ -10,8 +10,9 @@ def render_admin_panel():
 
     badge_count = f"({len(pending_users)} en attente)" if pending_users else ""
 
+    db_badge = "☁️ Google Cloud Firestore (Persistant)" if auth_service.use_firestore else "💾 SQLite Local (Développement)"
     with st.expander(f"🛡️ **Espace Administrateur • Gestion des Comptes {badge_count}**", expanded=bool(pending_users)):
-        st.caption("Validez ou gérez les accès des utilisateurs et leurs formules d'abonnement.")
+        st.caption(f"Validez ou gérez les accès des utilisateurs. • **Base active :** `{db_badge}`")
 
         # --- ONGLET 1 : DEMANDES EN ATTENTE ---
         st.subheader(f"🔔 Demandes d'inscription en attente ({len(pending_users)})")
